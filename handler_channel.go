@@ -159,54 +159,63 @@ func (c *channelHandler) run(
 		return err
 	}
 
-	done := func() {
-		inspectResult, err := c.networkHandler.dockerClient.ContainerExecInspect(ctx, c.execID)
-		if err != nil {
-			//TODO handle retry
-			onExit(137)
-		} else if inspectResult.ExitCode >= 0 {
-			onExit(sshserver.ExitStatus(inspectResult.ExitCode))
-		} else {
-			onExit(137)
-		}
-	}
+	go c.handleRun(ctx, onExit, attachResult, stdout, stderr, stdin)
 
-	go func() {
-		wg := &sync.WaitGroup{}
-		wg.Add(2)
-		if c.pty {
-			go func() {
-				defer done()
-				_, err = io.Copy(stdout, attachResult.Reader)
-				if err != nil && !errors.Is(err, io.EOF) {
-					c.networkHandler.logger.Warningd(
-						c.channelError("failed to stream TTY output", err),
-					)
-				}
-			}()
-		} else {
-			go func() {
-				defer done()
-				// Demultiplex Docker stream
-				_, err = stdcopy.StdCopy(stdout, stderr, attachResult.Reader)
-				if err != nil && !errors.Is(err, io.EOF) {
-					c.networkHandler.logger.Warningd(
-						c.channelError("failed to stream raw output", err),
-					)
-				}
-			}()
-		}
+	return nil
+}
+
+func (c *channelHandler) done(ctx context.Context, onExit func(exitStatus sshserver.ExitStatus)) {
+	inspectResult, err := c.networkHandler.dockerClient.ContainerExecInspect(ctx, c.execID)
+	if err != nil {
+		//TODO handle retry
+		onExit(137)
+	} else if inspectResult.ExitCode >= 0 {
+		onExit(sshserver.ExitStatus(inspectResult.ExitCode))
+	} else {
+		onExit(137)
+	}
+}
+
+func (c *channelHandler) handleRun(
+	ctx context.Context,
+	onExit func(exitStatus sshserver.ExitStatus),
+	attachResult types.HijackedResponse,
+	stdout io.Writer,
+	stderr io.Writer,
+	stdin io.Reader,
+) {
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
+	if c.pty {
 		go func() {
-			_, err = io.Copy(attachResult.Conn, stdin)
+			defer c.done(ctx, onExit)
+			_, err := io.Copy(stdout, attachResult.Reader)
 			if err != nil && !errors.Is(err, io.EOF) {
 				c.networkHandler.logger.Warningd(
-					c.channelError("failed to stream input", err),
+					c.channelError("failed to stream TTY output", err),
 				)
 			}
 		}()
+	} else {
+		go func() {
+			defer c.done(ctx, onExit)
+			// Demultiplex Docker stream
+			_, err := stdcopy.StdCopy(stdout, stderr, attachResult.Reader)
+			if err != nil && !errors.Is(err, io.EOF) {
+				c.networkHandler.logger.Warningd(
+					c.channelError("failed to stream raw output", err),
+				)
+			}
+		}()
+	}
+	go func() {
+		_, err := io.Copy(attachResult.Conn, stdin)
+		if err != nil && !errors.Is(err, io.EOF) {
+			c.networkHandler.logger.Warningd(
+				c.channelError("failed to stream input", err),
+			)
+		}
 	}()
-
-	return nil
 }
 
 func (c *channelHandler) OnExecRequest(
