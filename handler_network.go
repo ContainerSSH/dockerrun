@@ -118,7 +118,7 @@ func (n *networkHandler) setupDockerClient(ctx context.Context) error {
 	if n.dockerClient == nil {
 		dockerClient, err := n.config.getDockerClient()
 		if err != nil {
-			return fmt.Errorf("failed to create Docker client (%v)", err)
+			return fmt.Errorf("failed to create Docker client (%w)", err)
 		}
 		n.dockerClient = dockerClient
 	}
@@ -137,31 +137,12 @@ func (n *networkHandler) OnDisconnect() {
 		for i := 0; i < 6; i++ {
 			n.mutex.Unlock()
 			n.mutex.Lock()
-			if err := n.setupDockerClient(ctx); err != nil {
-				n.logger.Noticed(
-					n.containerError(
-						"failed to create Docker client for container removal on disconnect",
-						err,
-					),
-				)
-				lastError = err
-				time.Sleep(10 * time.Second)
-				continue
-			}
 
 			if _, err := n.dockerClient.ContainerInspect(ctx, n.containerID); err != nil {
 				if client.IsErrContainerNotFound(err) {
 					success = true
 					break
 				}
-				n.logger.Noticed(
-					containerError{
-						ConnectionID: n.connectionID,
-						ContainerID:  n.containerID,
-						Message:      "failed to inspect container on disconnect",
-						Error:        err.Error(),
-					},
-				)
 				lastError = err
 				time.Sleep(10 * time.Second)
 				continue
@@ -172,33 +153,19 @@ func (n *networkHandler) OnDisconnect() {
 					Force: true,
 				},
 			); err != nil {
-				n.logger.Noticed(
-					containerError{
-						ConnectionID: n.connectionID,
-						ContainerID:  n.containerID,
-						Message:      "failed to remove container on disconnect",
-						Error:        err.Error(),
-					},
-				)
 				lastError = err
 				time.Sleep(10 * time.Second)
 				continue
 			}
 			break
 		}
-		if success {
+		if !success && lastError != nil {
+			n.logger.Warningd(
+				n.containerError("failed to remove container on disconnect, giving up", lastError),
+			)
+		} else {
 			n.containerID = ""
 		}
 		n.mutex.Unlock()
-		if !success && lastError != nil {
-			n.logger.Warningd(
-				containerError{
-					ConnectionID: n.connectionID,
-					ContainerID:  n.containerID,
-					Message:      "failed to remove container on client disconnect",
-					Error:        lastError.Error(),
-				},
-			)
-		}
 	}
 }

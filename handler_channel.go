@@ -180,12 +180,7 @@ func (c *channelHandler) run(
 				_, err = io.Copy(stdout, attachResult.Reader)
 				if err != nil && !errors.Is(err, io.EOF) {
 					c.networkHandler.logger.Warningd(
-						containerError{
-							ConnectionID: c.networkHandler.connectionID,
-							ContainerID:  c.networkHandler.containerID,
-							Message:      "failed to stream TTY output",
-							Error:        err.Error(),
-						},
+						c.channelError("failed to stream TTY output", err),
 					)
 				}
 			}()
@@ -196,12 +191,7 @@ func (c *channelHandler) run(
 				_, err = stdcopy.StdCopy(stdout, stderr, attachResult.Reader)
 				if err != nil && !errors.Is(err, io.EOF) {
 					c.networkHandler.logger.Warningd(
-						containerError{
-							ConnectionID: c.networkHandler.connectionID,
-							ContainerID:  c.networkHandler.containerID,
-							Message:      "failed to stream raw output",
-							Error:        err.Error(),
-						},
+						c.channelError("failed to stream raw output", err),
 					)
 				}
 			}()
@@ -210,12 +200,7 @@ func (c *channelHandler) run(
 			_, err = io.Copy(attachResult.Conn, stdin)
 			if err != nil && !errors.Is(err, io.EOF) {
 				c.networkHandler.logger.Warningd(
-					containerError{
-						ConnectionID: c.networkHandler.connectionID,
-						ContainerID:  c.networkHandler.containerID,
-						Message:      "failed to stream input",
-						Error:        err.Error(),
-					},
+					c.channelError("failed to stream input", err),
 				)
 			}
 		}()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -44,7 +45,7 @@ func (config Config) pullImage(cli *client.Client, ctx context.Context) error {
 	image := config.Config.ContainerConfig.Image
 	_, err := reference.ParseNamed(config.Config.ContainerConfig.Image)
 	if err != nil {
-		if err == reference.ErrNameNotCanonical {
+		if errors.Is(err, reference.ErrNameNotCanonical) {
 			if !strings.Contains(config.Config.ContainerConfig.Image, "/") {
 				image = "docker.io/library/" + image
 			} else {
