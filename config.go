@@ -5,14 +5,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 )
 
-type Config struct {
-	Host   string          `json:"host" yaml:"host" comment:"Docker connect URL" default:"unix:///var/run/docker.sock"`
-	CaCert string          `json:"cacert" yaml:"cacert" comment:"CA certificate for Docker connection embedded in the configuration in PEM format."`
-	Cert   string          `json:"cert" yaml:"cert" comment:"Client certificate in PEM format embedded in the configuration."`
-	Key    string          `json:"key" yaml:"key" comment:"Client key in PEM format embedded in the configuration."`
-	Config ContainerConfig `json:"config" yaml:"config" comment:"Config configuration"`
-}
-
+// ContainerConfig contains the configuration of what container to run in Docker.
 type ContainerConfig struct {
 	ContainerConfig container.Config         `json:"container" yaml:"container" comment:"Config configuration." default:"{\"Image\":\"containerssh/containerssh-guest-image\"}"`
 	HostConfig      container.HostConfig     `json:"host" yaml:"host" comment:"Host configuration"`
@@ -20,4 +13,5 @@ type ContainerConfig struct {
 	ContainerName   string                   `json:"containername" yaml:"containername" comment:"Name for the container to be launched"`
 	Subsystems      map[string]string        `json:"subsystems" yaml:"subsystems" comment:"Subsystem names and binaries map." default:"{\"sftp\":\"/usr/lib/openssh/sftp-server\"}"`
 	DisableCommand  bool                     `json:"disableCommand" yaml:"disableCommand" comment:"Disable command execution passed from SSH"`
+	IdleCommand     []string                 `json:"idleCommand" yaml:"idleCommand" comment:"Run this command to wait for container exit" default:"[\"/bin/sh\", \"-c\", \"sleep infinity & PID=$!; trap \\\"kill $PID\\\" INT TERM; wait\"]"`
 }

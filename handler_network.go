@@ -2,6 +2,7 @@ package dockerrun
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"sync"
@@ -10,12 +11,15 @@ import (
 	"github.com/containerssh/log"
 	"github.com/containerssh/sshserver"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/qdm12/reprint"
 )
 
 type networkHandler struct {
 	mutex        *sync.Mutex
 	client       net.TCPAddr
+	username     string
 	connectionID []byte
 	config       Config
 	containerID  string
@@ -27,7 +31,7 @@ type containerError struct {
 	ConnectionID []byte `json:"connectionId"`
 	ContainerID  string `json:"containerId"`
 	Message      string `json:"message"`
-	Error        error  `json:"error"`
+	Error        string `json:"error"`
 }
 
 func (n *networkHandler) containerError(message string, err error) containerError {
@@ -35,7 +39,7 @@ func (n *networkHandler) containerError(message string, err error) containerErro
 		ConnectionID: n.connectionID,
 		ContainerID:  n.containerID,
 		Message:      message,
-		Error:        err,
+		Error:        err.Error(),
 	}
 }
 
@@ -55,7 +59,8 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 ) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
-	ctx := context.Background()
+	ctx := context.TODO()
+	n.username = username
 
 	if err := n.setupDockerClient(ctx); err != nil {
 		return nil, err
@@ -71,9 +76,21 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 
 func (n *networkHandler) createContainer(ctx context.Context) error {
 	if n.containerID == "" {
+		containerConfig := n.config.Config.ContainerConfig
+		newConfig := container.Config{}
+		if err := reprint.FromTo(&containerConfig, &newConfig); err != nil {
+			return err
+		}
+		if newConfig.Labels == nil {
+			newConfig.Labels = map[string]string{}
+		}
+		newConfig.Cmd = n.config.Config.IdleCommand
+		newConfig.Labels["containerssh_connection_id"] = hex.EncodeToString(n.connectionID)
+		newConfig.Labels["containerssh_ip"] = n.client.IP.String()
+		newConfig.Labels["containerssh_username"] = n.username
 		body, err := n.dockerClient.ContainerCreate(
 			ctx,
-			&n.config.Config.ContainerConfig,
+			&newConfig,
 			&n.config.Config.HostConfig,
 			&n.config.Config.NetworkConfig,
 			n.config.Config.ContainerName,
@@ -82,6 +99,14 @@ func (n *networkHandler) createContainer(ctx context.Context) error {
 			return err
 		}
 		n.containerID = body.ID
+
+		if err := n.dockerClient.ContainerStart(
+			ctx,
+			n.containerID,
+			types.ContainerStartOptions{},
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -101,7 +126,7 @@ func (n *networkHandler) setupDockerClient(ctx context.Context) error {
 }
 
 func (n *networkHandler) OnDisconnect() {
-	ctx := context.Background()
+	ctx := context.TODO()
 	n.mutex.Lock()
 	if n.containerID != "" {
 		success := false
@@ -121,11 +146,7 @@ func (n *networkHandler) OnDisconnect() {
 				continue
 			}
 
-			if err := n.dockerClient.ContainerRemove(
-				ctx, n.containerID, types.ContainerRemoveOptions{
-					Force: true,
-				},
-			); err != nil {
+			if _, err := n.dockerClient.ContainerInspect(ctx, n.containerID); err != nil {
 				if client.IsErrContainerNotFound(err) {
 					success = true
 					break
@@ -134,8 +155,26 @@ func (n *networkHandler) OnDisconnect() {
 					containerError{
 						ConnectionID: n.connectionID,
 						ContainerID:  n.containerID,
+						Message:      "failed to inspect container on disconnect",
+						Error:        err.Error(),
+					},
+				)
+				lastError = err
+				time.Sleep(10 * time.Second)
+				continue
+			}
+
+			if err := n.dockerClient.ContainerRemove(
+				ctx, n.containerID, types.ContainerRemoveOptions{
+					Force: true,
+				},
+			); err != nil {
+				n.logger.Noticed(
+					containerError{
+						ConnectionID: n.connectionID,
+						ContainerID:  n.containerID,
 						Message:      "failed to remove container on disconnect",
-						Error:        err,
+						Error:        err.Error(),
 					},
 				)
 				lastError = err
@@ -144,14 +183,17 @@ func (n *networkHandler) OnDisconnect() {
 			}
 			break
 		}
+		if success {
+			n.containerID = ""
+		}
 		n.mutex.Unlock()
-		if !success {
+		if !success && lastError != nil {
 			n.logger.Warningd(
 				containerError{
 					ConnectionID: n.connectionID,
 					ContainerID:  n.containerID,
 					Message:      "failed to remove container on client disconnect",
-					Error:        lastError,
+					Error:        lastError.Error(),
 				},
 			)
 		}

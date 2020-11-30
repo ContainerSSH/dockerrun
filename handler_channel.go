@@ -10,7 +10,6 @@ import (
 
 	"github.com/containerssh/sshserver"
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/mattn/go-shellwords"
 )
@@ -29,7 +28,6 @@ type channelHandler struct {
 	pty            bool
 	columns        uint32
 	rows           uint32
-	dockerClient   *client.Client
 	execID         string
 }
 
@@ -109,7 +107,7 @@ func (c *channelHandler) run(
 	onExit func(exitStatus sshserver.ExitStatus),
 ) error {
 	c.networkHandler.mutex.Lock()
-	defer c.networkHandler.mutex.Lock()
+	defer c.networkHandler.mutex.Unlock()
 	if c.execID != "" {
 		return fmt.Errorf("program already running")
 	}
@@ -162,11 +160,11 @@ func (c *channelHandler) run(
 	}
 
 	done := func() {
-		inspectResult, err := c.dockerClient.ContainerExecInspect(ctx, c.execID)
+		inspectResult, err := c.networkHandler.dockerClient.ContainerExecInspect(ctx, c.execID)
 		if err != nil {
 			//TODO handle retry
 			onExit(137)
-		} else if inspectResult.ExitCode > 0 {
+		} else if inspectResult.ExitCode >= 0 {
 			onExit(sshserver.ExitStatus(inspectResult.ExitCode))
 		} else {
 			onExit(137)
@@ -174,31 +172,52 @@ func (c *channelHandler) run(
 	}
 
 	go func() {
-		var once sync.Once
+		wg := &sync.WaitGroup{}
+		wg.Add(2)
 		if c.pty {
 			go func() {
+				defer done()
 				_, err = io.Copy(stdout, attachResult.Reader)
 				if err != nil && !errors.Is(err, io.EOF) {
-					//todo error handling
+					c.networkHandler.logger.Warningd(
+						containerError{
+							ConnectionID: c.networkHandler.connectionID,
+							ContainerID:  c.networkHandler.containerID,
+							Message:      "failed to stream TTY output",
+							Error:        err.Error(),
+						},
+					)
 				}
-				once.Do(done)
 			}()
 		} else {
 			go func() {
-				//Demultiplex Docker stream
+				defer done()
+				// Demultiplex Docker stream
 				_, err = stdcopy.StdCopy(stdout, stderr, attachResult.Reader)
 				if err != nil && !errors.Is(err, io.EOF) {
-					//todo error handling
+					c.networkHandler.logger.Warningd(
+						containerError{
+							ConnectionID: c.networkHandler.connectionID,
+							ContainerID:  c.networkHandler.containerID,
+							Message:      "failed to stream raw output",
+							Error:        err.Error(),
+						},
+					)
 				}
-				once.Do(done)
 			}()
 		}
 		go func() {
 			_, err = io.Copy(attachResult.Conn, stdin)
 			if err != nil && !errors.Is(err, io.EOF) {
-				//todo error handling
+				c.networkHandler.logger.Warningd(
+					containerError{
+						ConnectionID: c.networkHandler.connectionID,
+						ContainerID:  c.networkHandler.containerID,
+						Message:      "failed to stream input",
+						Error:        err.Error(),
+					},
+				)
 			}
-			once.Do(done)
 		}()
 	}()
 
@@ -260,7 +279,7 @@ func (c *channelHandler) OnWindow(_ uint64, columns uint32, rows uint32, _ uint3
 	//TODO context handling
 	ctx := context.Background()
 
-	if err := c.dockerClient.ContainerExecResize(
+	if err := c.networkHandler.dockerClient.ContainerExecResize(
 		ctx, c.execID, types.ResizeOptions{
 			Height: uint(rows),
 			Width:  uint(columns),
