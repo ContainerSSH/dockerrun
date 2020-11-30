@@ -65,6 +65,9 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 	if err := n.setupDockerClient(ctx); err != nil {
 		return nil, err
 	}
+	if err := n.config.pullImage(n.dockerClient, ctx); err != nil {
+		return nil, err
+	}
 	if err := n.createContainer(ctx); err != nil {
 		return nil, err
 	}
