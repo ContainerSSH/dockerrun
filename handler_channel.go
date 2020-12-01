@@ -115,14 +115,7 @@ func (c *channelHandler) run(
 	//TODO proper timeout handling
 	ctx := context.Background()
 
-	execConfig := types.ExecConfig{
-		Tty:          c.pty,
-		AttachStdin:  true,
-		AttachStderr: true,
-		AttachStdout: true,
-		Env:          c.createEnv(),
-		Cmd:          program,
-	}
+	execConfig := c.getExecConfig(program)
 
 	response, err := c.networkHandler.dockerClient.ContainerExecCreate(
 		ctx,
@@ -162,6 +155,17 @@ func (c *channelHandler) run(
 	go c.handleRun(ctx, onExit, attachResult, stdout, stderr, stdin)
 
 	return nil
+}
+
+func (c *channelHandler) getExecConfig(program []string) types.ExecConfig {
+	return types.ExecConfig{
+		Tty:          c.pty,
+		AttachStdin:  true,
+		AttachStderr: true,
+		AttachStdout: true,
+		Env:          c.createEnv(),
+		Cmd:          program,
+	}
 }
 
 func (c *channelHandler) done(ctx context.Context, onExit func(exitStatus sshserver.ExitStatus)) {
