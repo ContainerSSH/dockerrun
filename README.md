@@ -1,4 +1,5 @@
 [![ContainerSSH - Launch Containers on Demand](https://containerssh.github.io/images/logo-for-embedding.svg)](https://containerssh.github.io/)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FContainerSSH%2Fdockerrun.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FContainerSSH%2Fdockerrun?ref=badge_shield)
 
 <!--suppress HtmlDeprecatedAttribute -->
 <h1 align="center">ContainerSSH DockerRun Backend Library</h1>
@@ -28,3 +29,6 @@ if err != nil {
 }
 // Use DR
 ```
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FContainerSSH%2Fdockerrun.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FContainerSSH%2Fdockerrun?ref=badge_large)
