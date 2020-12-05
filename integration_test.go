@@ -5,9 +5,10 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"os"
 	"testing"
 
-	"github.com/containerssh/log/standard"
+	"github.com/containerssh/log"
 	"github.com/containerssh/sshserver"
 	"github.com/containerssh/structutils"
 	"github.com/docker/docker/api/types"
@@ -38,7 +39,7 @@ func TestConnectAndDisconnectShouldCreateAndRemoveContainer(t *testing.T) {
 		},
 		[]byte("asdf"),
 		config,
-		standard.New(),
+		createLogger(t),
 	)
 	must(t, assert.Nil(t, err))
 	_, err = dr.OnHandshakeSuccess("test")
@@ -79,7 +80,7 @@ func TestSingleSessionShouldRunProgram(t *testing.T) {
 		},
 		[]byte("asdf"),
 		config,
-		standard.New(),
+		createLogger(t),
 	)
 	must(t, assert.Nil(t, err))
 	ssh, err := dr.OnHandshakeSuccess("test")
@@ -113,4 +114,15 @@ func TestSingleSessionShouldRunProgram(t *testing.T) {
 	assert.Equal(t, "Hello world!\n", stdoutBytes.String())
 	assert.Equal(t, "", stderrBytes.String())
 	assert.Equal(t, 0, status)
+}
+
+func createLogger(t *testing.T) (log.Logger) {
+	logger, err := log.New(
+		log.Config{
+			Level:  log.LevelDebug,
+			Format: "text",
+		}, "dockerrun", os.Stdout,
+	)
+	assert.Nil(t, err, "failed to create logger (%v)", err)
+	return logger
 }
