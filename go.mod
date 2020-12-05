@@ -7,11 +7,11 @@ require (
 	github.com/containerssh/log v0.9.4
 	github.com/containerssh/sshserver v0.9.7
 	github.com/containerssh/structutils v0.9.0
+	github.com/containerssh/unixutils v0.9.0
 	github.com/docker/distribution v2.7.1+incompatible
 	github.com/docker/docker v1.13.1
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.4.0 // indirect
-	github.com/mattn/go-shellwords v1.0.10
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/qdm12/reprint v0.0.0-20200326205758-722754a53494
