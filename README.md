@@ -22,9 +22,11 @@ connectionID := []byte("asdf")
 config := dockerrun.Config{
     //...
 }
-dr, err := dockerrun.New(client, connectionID, config)
+dr, err := dockerrun.New(client, connectionID, config, logger)
 if err != nil {
     // Handle error
 }
 // Use DR
 ```
+
+The `logger` parameter is a logger from the [ContainerSSH logger library](https://github.com/containerssh/log).
