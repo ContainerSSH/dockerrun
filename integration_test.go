@@ -9,7 +9,7 @@ import (
 
 	"github.com/containerssh/log/standard"
 	"github.com/containerssh/sshserver"
-	"github.com/creasty/defaults"
+	"github.com/containerssh/structutils"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -28,8 +28,7 @@ func TestConnectAndDisconnectShouldCreateAndRemoveContainer(t *testing.T) {
 	config := dockerrun.Config{
 		Config: dockerrun.ContainerConfig{},
 	}
-	err := defaults.Set(&config)
-	must(t, assert.Nil(t, err))
+	structutils.Defaults(&config)
 
 	dr, err := dockerrun.New(
 		net.TCPAddr{
@@ -70,8 +69,7 @@ func TestSingleSessionShouldRunProgram(t *testing.T) {
 	config := dockerrun.Config{
 		Config: dockerrun.ContainerConfig{},
 	}
-	err := defaults.Set(&config)
-	must(t, assert.Nil(t, err))
+	structutils.Defaults(&config)
 
 	dr, err := dockerrun.New(
 		net.TCPAddr{

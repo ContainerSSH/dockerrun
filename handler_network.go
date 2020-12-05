@@ -3,13 +3,17 @@ package dockerrun
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/containerssh/log"
 	"github.com/containerssh/sshserver"
+	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
@@ -59,16 +63,17 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 ) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
-	ctx := context.TODO()
+	ctx, cancelFunc := context.WithTimeout(context.Background(), n.config.Config.Timeout)
+	defer cancelFunc()
 	n.username = username
 
-	if err := n.setupDockerClient(ctx); err != nil {
+	if err := n.setupDockerClient(); err != nil {
 		return nil, err
 	}
-	if err := n.config.pullImage(n.dockerClient, ctx); err != nil {
+	if err := n.pullImage(ctx); err != nil {
 		return nil, err
 	}
-	if err := n.createContainer(ctx); err != nil {
+	if err := n.createAndStartContainer(ctx); err != nil {
 		return nil, err
 	}
 	return &sshConnectionHandler{
@@ -77,7 +82,71 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 	}, nil
 }
 
-func (n *networkHandler) createContainer(ctx context.Context) error {
+
+func (n *networkHandler) pullImage(ctx context.Context) error {
+	config := n.config
+	image := config.Config.ContainerConfig.Image
+	_, err := reference.ParseNamed(config.Config.ContainerConfig.Image)
+	if err != nil {
+		if errors.Is(err, reference.ErrNameNotCanonical) {
+			if !strings.Contains(config.Config.ContainerConfig.Image, "/") {
+				image = "docker.io/library/" + image
+			} else {
+				image = "docker.io/" + image
+			}
+		} else {
+			return err
+		}
+	}
+
+	var lastError error
+	loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+		}
+		pullReader, err := n.dockerClient.ImagePull(ctx, image, types.ImagePullOptions{})
+		if err != nil {
+			lastError = err
+			n.logger.Warningd(
+				n.containerError(fmt.Sprintf("failed to pull image %s, retrying in 10 seconds", image), err),
+			)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		_, err = ioutil.ReadAll(pullReader)
+		if err != nil {
+			lastError = err
+			_ = pullReader.Close()
+			n.logger.Warningd(
+				n.containerError(fmt.Sprintf("failed to pull image %s, retrying in 10 seconds", image), err),
+			)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		err = pullReader.Close()
+		if err != nil {
+			lastError = err
+			_ = pullReader.Close()
+			n.logger.Warningd(
+				n.containerError(fmt.Sprintf("failed to pull image %s, retrying in 10 seconds", image), err),
+			)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		break
+	}
+	if lastError != nil {
+		n.logger.Errord(
+			n.containerError(fmt.Sprintf("failed to pull image %s, giving up", image), lastError),
+		)
+	}
+	return lastError
+}
+
+func (n *networkHandler) createAndStartContainer(ctx context.Context) error {
 	if n.containerID == "" {
 		containerConfig := n.config.Config.ContainerConfig
 		newConfig := container.Config{}
@@ -91,6 +160,55 @@ func (n *networkHandler) createContainer(ctx context.Context) error {
 		newConfig.Labels["containerssh_connection_id"] = hex.EncodeToString(n.connectionID)
 		newConfig.Labels["containerssh_ip"] = n.client.IP.String()
 		newConfig.Labels["containerssh_username"] = n.username
+		err := n.createContainer(ctx, newConfig)
+		if err != nil {
+			return err
+		}
+
+		if err := n.startContainer(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n *networkHandler) startContainer(ctx context.Context) error {
+	var lastError error
+	loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+		}
+		if err := n.dockerClient.ContainerStart(
+			ctx,
+			n.containerID,
+			types.ContainerStartOptions{},
+		); err != nil {
+			lastError = err
+			n.logger.Warningd(n.containerError("failed to start container, retrying in 10 seconds", err))
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		break
+	}
+	if lastError != nil {
+		n.logger.Errord(n.containerError("failed to start container, giving up", lastError))
+		return lastError
+	}
+	return nil
+}
+
+func (n *networkHandler) createContainer(ctx context.Context, newConfig container.Config) (error) {
+	var lastError error
+	loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+		}
 		body, err := n.dockerClient.ContainerCreate(
 			ctx,
 			&newConfig,
@@ -99,22 +217,22 @@ func (n *networkHandler) createContainer(ctx context.Context) error {
 			n.config.Config.ContainerName,
 		)
 		if err != nil {
-			return err
+			lastError = err
+			n.logger.Warningd(n.containerError("failed to create container, retrying in 10 seconds", err))
+			time.Sleep(10 * time.Second)
+			continue
 		}
 		n.containerID = body.ID
-
-		if err := n.dockerClient.ContainerStart(
-			ctx,
-			n.containerID,
-			types.ContainerStartOptions{},
-		); err != nil {
-			return err
-		}
+		break
+	}
+	if lastError != nil {
+		n.logger.Errord(n.containerError("failed to create container, giving up", lastError))
+		return lastError
 	}
 	return nil
 }
 
-func (n *networkHandler) setupDockerClient(ctx context.Context) error {
+func (n *networkHandler) setupDockerClient() error {
 	if n.dockerClient == nil {
 		dockerClient, err := n.config.getDockerClient()
 		if err != nil {
@@ -122,21 +240,25 @@ func (n *networkHandler) setupDockerClient(ctx context.Context) error {
 		}
 		n.dockerClient = dockerClient
 	}
-	if _, err := n.dockerClient.Ping(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 
 func (n *networkHandler) OnDisconnect() {
-	ctx := context.TODO()
+	ctx, cancelFunc := context.WithTimeout(context.Background(), n.config.Config.Timeout)
+	defer cancelFunc()
 	n.mutex.Lock()
 	if n.containerID != "" {
 		success := false
 		var lastError error
-		for i := 0; i < 6; i++ {
+		loop:
+		for {
 			n.mutex.Unlock()
 			n.mutex.Lock()
+			select {
+				case <-ctx.Done():
+					break loop
+				default:
+			}
 
 			if _, err := n.dockerClient.ContainerInspect(ctx, n.containerID); err != nil {
 				if client.IsErrContainerNotFound(err) {
@@ -154,13 +276,16 @@ func (n *networkHandler) OnDisconnect() {
 				},
 			); err != nil {
 				lastError = err
+				n.logger.Warningd(
+					n.containerError("failed to remove container on disconnect, retrying in 10 seconds", lastError),
+				)
 				time.Sleep(10 * time.Second)
 				continue
 			}
-			break
+			break loop
 		}
 		if !success && lastError != nil {
-			n.logger.Warningd(
+			n.logger.Errord(
 				n.containerError("failed to remove container on disconnect, giving up", lastError),
 			)
 		} else {
