@@ -5,7 +5,7 @@ go 1.14
 require (
 	github.com/Microsoft/go-winio v0.4.15 // indirect
 	github.com/containerssh/log v0.9.2
-	github.com/containerssh/sshserver v0.9.6
+	github.com/containerssh/sshserver v0.9.7
 	github.com/containerssh/structutils v0.9.0
 	github.com/docker/distribution v2.7.1+incompatible
 	github.com/docker/docker v1.13.1
