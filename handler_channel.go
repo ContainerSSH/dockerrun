@@ -9,9 +9,9 @@ import (
 	"sync"
 
 	"github.com/containerssh/sshserver"
+	"github.com/containerssh/unixutils"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/mattn/go-shellwords"
 )
 
 type channelError struct {
@@ -84,7 +84,7 @@ func (c *channelHandler) createEnv() (result []string) {
 }
 
 func (c *channelHandler) parseProgram(program string) []string {
-	programParts, err := shellwords.Parse(program)
+	programParts, err := unixutils.ParseCMD(program)
 	if err != nil {
 		return []string{"/bin/sh", "-c", program}
 	} else {
