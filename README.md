@@ -18,7 +18,7 @@ The network connection handler can be created with the `New()` method:
 
 ```go
 var client net.TCPAddr
-connectionID := []byte("asdf")
+connectionID := "0123456789ABCDEF"
 config := dockerrun.Config{
     //...
 }
@@ -26,7 +26,41 @@ dr, err := dockerrun.New(client, connectionID, config, logger)
 if err != nil {
     // Handle error
 }
-// Use DR
 ```
 
 The `logger` parameter is a logger from the [ContainerSSH logger library](https://github.com/containerssh/log).
+
+The `dr` variable can then be used to create a container on finished handshake:
+
+```go
+ssh, err := dr.OnHandshakeSuccess("provided-connection-username")
+```
+
+Conversely, on disconnect you must call `dr.OnDisconnect()`. The `ssh` variable can then be used to create session channels:
+
+```go
+var channelID uint64 = 0
+extraData := []byte{}
+session, err := ssh.OnSessionChannel(channelID, extraData)
+```
+
+Finally, the session can be used to launch programs:
+
+```go
+var requestID uint64 = 0
+err = session.OnEnvRequest(requestID, "foo", "bar")
+// ...
+requestID = 1
+var stdin io.Reader
+var stdout, stderr io.Writer
+err = session.OnShell(
+    requestID,
+    stdin,
+    stdout,
+    stderr,
+    func(exitStatus ExitStatus) {
+        // ...
+    },
+)
+```
+
