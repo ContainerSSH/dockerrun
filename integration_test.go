@@ -26,10 +26,12 @@ func must(t *testing.T, arg bool) {
 }
 
 func TestConnectAndDisconnectShouldCreateAndRemoveContainer(t *testing.T) {
-	config := dockerrun.Config{
-		Config: dockerrun.ContainerConfig{},
-	}
+	t.Parallel()
+
+	config := dockerrun.Config{}
 	structutils.Defaults(&config)
+
+	config.Config.ContainerConfig.Image = "ubuntu:18.04"
 
 	dr, err := dockerrun.New(
 		net.TCPAddr{
@@ -37,20 +39,21 @@ func TestConnectAndDisconnectShouldCreateAndRemoveContainer(t *testing.T) {
 			Port: 2222,
 			Zone: "",
 		},
-		[]byte("asdf"),
+		"0123456789AAAAAA",
 		config,
 		createLogger(t),
 	)
 	must(t, assert.Nil(t, err))
 	_, err = dr.OnHandshakeSuccess("test")
-	must(t, assert.Nil(t, err))
 	defer dr.OnDisconnect()
+	must(t, assert.Nil(t, err))
 
 	dockerClient, err := client.NewClient(config.Host, "", nil, make(map[string]string))
 	must(t, assert.Nil(t, err))
 	f := filters.NewArgs()
 	f.Add("label", "containerssh_username=test")
 	f.Add("label", "containerssh_ip=127.0.0.1")
+	f.Add("label", "containerssh_connection_id=0123456789AAAAAA")
 	containers, err := dockerClient.ContainerList(
 		context.Background(),
 		types.ContainerListOptions{
@@ -67,9 +70,9 @@ func TestConnectAndDisconnectShouldCreateAndRemoveContainer(t *testing.T) {
 }
 
 func TestSingleSessionShouldRunProgram(t *testing.T) {
-	config := dockerrun.Config{
-		Config: dockerrun.ContainerConfig{},
-	}
+	t.Parallel()
+
+	config := dockerrun.Config{}
 	structutils.Defaults(&config)
 
 	dr, err := dockerrun.New(
@@ -78,7 +81,7 @@ func TestSingleSessionShouldRunProgram(t *testing.T) {
 			Port: 2222,
 			Zone: "",
 		},
-		[]byte("asdf"),
+		"0123456789AAAAAB",
 		config,
 		createLogger(t),
 	)
@@ -116,7 +119,7 @@ func TestSingleSessionShouldRunProgram(t *testing.T) {
 	assert.Equal(t, 0, status)
 }
 
-func createLogger(t *testing.T) (log.Logger) {
+func createLogger(t *testing.T) log.Logger {
 	logger, err := log.New(
 		log.Config{
 			Level:  log.LevelDebug,
