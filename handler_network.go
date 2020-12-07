@@ -81,21 +81,60 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 	}, nil
 }
 
+func (n *networkHandler) pullNeeded(ctx context.Context) (bool, error) {
+	image := n.config.Config.ContainerConfig.Image
+
+	switch n.config.Config.ImagePullPolicy {
+	case ImagePullPolicyNever:
+		return false, nil
+	case ImagePullPolicyAlways:
+		return true, nil
+	default:
+		if !strings.Contains(image, ":") || strings.HasSuffix(image, ":latest") {
+			return true, nil
+		}
+
+		var lastError error
+	loop:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop
+			default:
+			}
+
+			if _, _, err := n.dockerClient.ImageInspectWithRaw(ctx, image); err != nil {
+				if client.IsErrImageNotFound(err) {
+					return true, nil
+				}
+				n.logger.Warningd(
+					n.containerError("failed to list images, retrying in 10 seconds", err),
+				)
+				lastError = err
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			return false, nil
+		}
+		n.logger.Errord(
+			n.containerError("failed to list images, giving up", lastError),
+		)
+
+		return true, lastError
+	}
+}
 
 func (n *networkHandler) pullImage(ctx context.Context) (err error) {
+	pullNeeded, err := n.pullNeeded(ctx)
+	if err != nil || !pullNeeded {
+		return err
+	}
+
 	config := n.config
 	image := config.Config.ContainerConfig.Image
-	_, err = reference.ParseNamed(config.Config.ContainerConfig.Image)
+	image, err = n.getCanonicalImageName(image)
 	if err != nil {
-		if errors.Is(err, reference.ErrNameNotCanonical) {
-			if !strings.Contains(config.Config.ContainerConfig.Image, "/") {
-				image = "docker.io/library/" + image
-			} else {
-				image = "docker.io/" + image
-			}
-		} else {
-			return err
-		}
+		return err
 	}
 
 	var lastError error
@@ -143,6 +182,22 @@ loop:
 		)
 	}
 	return lastError
+}
+
+func (n *networkHandler) getCanonicalImageName(image string) (string, error) {
+	_, err := reference.ParseNamed(image)
+	if err != nil {
+		if errors.Is(err, reference.ErrNameNotCanonical) {
+			if !strings.Contains(image, "/") {
+				image = "docker.io/library/" + image
+			} else {
+				image = "docker.io/" + image
+			}
+		} else {
+			return "", err
+		}
+	}
+	return image, nil
 }
 
 func (n *networkHandler) createAndStartContainer(ctx context.Context) error {
