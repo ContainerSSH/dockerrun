@@ -2,7 +2,6 @@ package dockerrun
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -13,18 +12,18 @@ import (
 
 	"github.com/containerssh/log"
 	"github.com/containerssh/sshserver"
+	"github.com/containerssh/structutils"
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/qdm12/reprint"
 )
 
 type networkHandler struct {
 	mutex        *sync.Mutex
 	client       net.TCPAddr
 	username     string
-	connectionID []byte
+	connectionID string
 	config       Config
 	containerID  string
 	dockerClient *client.Client
@@ -32,7 +31,7 @@ type networkHandler struct {
 }
 
 type containerError struct {
-	ConnectionID []byte `json:"connectionId"`
+	ConnectionID string `json:"connectionId"`
 	ContainerID  string `json:"containerId"`
 	Message      string `json:"message"`
 	Error        string `json:"error"`
@@ -51,7 +50,7 @@ func (n *networkHandler) OnAuthPassword(_ string, _ []byte) (response sshserver.
 	return sshserver.AuthResponseUnavailable, fmt.Errorf("dockerrun does not support authentication")
 }
 
-func (n *networkHandler) OnAuthPubKey(_ string, _ []byte) (response sshserver.AuthResponse, reason error) {
+func (n *networkHandler) OnAuthPubKey(_ string, _ string) (response sshserver.AuthResponse, reason error) {
 	return sshserver.AuthResponseUnavailable, fmt.Errorf("dockerrun does not support authentication")
 }
 
@@ -83,10 +82,10 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 }
 
 
-func (n *networkHandler) pullImage(ctx context.Context) error {
+func (n *networkHandler) pullImage(ctx context.Context) (err error) {
 	config := n.config
 	image := config.Config.ContainerConfig.Image
-	_, err := reference.ParseNamed(config.Config.ContainerConfig.Image)
+	_, err = reference.ParseNamed(config.Config.ContainerConfig.Image)
 	if err != nil {
 		if errors.Is(err, reference.ErrNameNotCanonical) {
 			if !strings.Contains(config.Config.ContainerConfig.Image, "/") {
@@ -100,7 +99,7 @@ func (n *networkHandler) pullImage(ctx context.Context) error {
 	}
 
 	var lastError error
-	loop:
+loop:
 	for {
 		select {
 		case <-ctx.Done():
@@ -150,14 +149,14 @@ func (n *networkHandler) createAndStartContainer(ctx context.Context) error {
 	if n.containerID == "" {
 		containerConfig := n.config.Config.ContainerConfig
 		newConfig := container.Config{}
-		if err := reprint.FromTo(&containerConfig, &newConfig); err != nil {
+		if err := structutils.Copy(&newConfig, &containerConfig); err != nil {
 			return err
 		}
 		if newConfig.Labels == nil {
 			newConfig.Labels = map[string]string{}
 		}
 		newConfig.Cmd = n.config.Config.IdleCommand
-		newConfig.Labels["containerssh_connection_id"] = hex.EncodeToString(n.connectionID)
+		newConfig.Labels["containerssh_connection_id"] = n.connectionID
 		newConfig.Labels["containerssh_ip"] = n.client.IP.String()
 		newConfig.Labels["containerssh_username"] = n.username
 		err := n.createContainer(ctx, newConfig)
@@ -174,7 +173,7 @@ func (n *networkHandler) createAndStartContainer(ctx context.Context) error {
 
 func (n *networkHandler) startContainer(ctx context.Context) error {
 	var lastError error
-	loop:
+loop:
 	for {
 		select {
 		case <-ctx.Done():
@@ -200,9 +199,9 @@ func (n *networkHandler) startContainer(ctx context.Context) error {
 	return nil
 }
 
-func (n *networkHandler) createContainer(ctx context.Context, newConfig container.Config) (error) {
+func (n *networkHandler) createContainer(ctx context.Context, newConfig container.Config) error {
 	var lastError error
-	loop:
+loop:
 	for {
 		select {
 		case <-ctx.Done():
@@ -250,14 +249,14 @@ func (n *networkHandler) OnDisconnect() {
 	if n.containerID != "" {
 		success := false
 		var lastError error
-		loop:
+	loop:
 		for {
 			n.mutex.Unlock()
 			n.mutex.Lock()
 			select {
-				case <-ctx.Done():
-					break loop
-				default:
+			case <-ctx.Done():
+				break loop
+			default:
 			}
 
 			if _, err := n.dockerClient.ContainerInspect(ctx, n.containerID); err != nil {

@@ -10,7 +10,7 @@ import (
 
 // New creates a new NetworkConnectionHandler for a specific client.
 //goland:noinspection GoUnusedExportedFunction
-func New(client net.TCPAddr, connectionID []byte, config Config, logger log.Logger) (sshserver.NetworkConnectionHandler, error) {
+func New(client net.TCPAddr, connectionID string, config Config, logger log.Logger) (sshserver.NetworkConnectionHandler, error) {
 	return &networkHandler{
 		mutex:        &sync.Mutex{},
 		client:       client,
