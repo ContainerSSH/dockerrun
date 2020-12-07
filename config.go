@@ -1,11 +1,39 @@
 package dockerrun
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 )
+
+type ImagePullPolicy string
+
+const (
+	// ImagePullPolicyAlways means that the container image will be pulled on every connection.
+	ImagePullPolicyAlways ImagePullPolicy = "Always"
+	// ImagePullPolicyIfNotPresent means the image will be pulled if the image is not present locally, an empty tag, or
+	// the "latest" tag was specified.
+	ImagePullPolicyIfNotPresent ImagePullPolicy = "IfNotPresent"
+	// ImagePullPolicyNever means that the image will be never pulled, and if the image is not available locally the
+	// connection will fail.
+	ImagePullPolicyNever ImagePullPolicy = "Never"
+)
+
+// Validate checks if the given image pull policy is valid.
+func (p ImagePullPolicy) Validate() error {
+	switch p {
+	case ImagePullPolicyAlways:
+		fallthrough
+	case ImagePullPolicyIfNotPresent:
+		fallthrough
+	case ImagePullPolicyNever:
+		return nil
+	default:
+		return fmt.Errorf("invalid image pull policy: %s", p)
+	}
+}
 
 // ContainerConfig contains the configuration of what container to run in Docker.
 type ContainerConfig struct {
@@ -24,7 +52,20 @@ type ContainerConfig struct {
 	DisableCommand bool `json:"disableCommand" yaml:"disableCommand" comment:"Disable command execution passed from SSH"`
 	// IdleCommand is the command that runs as the first process in the container. The only job of this command is to
 	// keep the container alive and exit when a TERM signal is sent.
-	IdleCommand     []string                 `json:"idleCommand" yaml:"idleCommand" comment:"Run this command to wait for container exit" default:"[\"/bin/sh\", \"-c\", \"sleep infinity & PID=$!; trap \\\"kill $PID\\\" INT TERM; wait\"]"`
+	IdleCommand []string `json:"idleCommand" yaml:"idleCommand" comment:"Run this command to wait for container exit" default:"[\"/bin/sh\", \"-c\", \"sleep infinity & PID=$!; trap \\\"kill $PID\\\" INT TERM; wait\"]"`
+	// ImagePullPolicy controls when to pull container images.
+	ImagePullPolicy ImagePullPolicy `json:"imagePullPolicy" yaml:"imagePullPolicy" comment:"Image pull polcy" default:"IfNotPresent"`
 	// Timeout is the timeout for container start.
 	Timeout time.Duration `json:"timeout" yaml:"timeout" comment:"Timeout for container start." default:"60s"`
+}
+
+// Validate validates the dockerrun config structure.
+func (c ContainerConfig) Validate() error {
+	if len(c.IdleCommand) == 0 {
+		return fmt.Errorf("empty idle command provided")
+	}
+	if err := c.ImagePullPolicy.Validate(); err != nil {
+		return err
+	}
+	return nil
 }
