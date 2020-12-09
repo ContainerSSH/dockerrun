@@ -17,5 +17,6 @@ func New(client net.TCPAddr, connectionID string, config Config, logger log.Logg
 		connectionID: connectionID,
 		config:       config,
 		logger:       logger,
+		disconnected: false,
 	}, nil
 }

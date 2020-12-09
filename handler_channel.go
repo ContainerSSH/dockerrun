@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/containerssh/sshserver"
 	"github.com/containerssh/unixutils"
@@ -29,6 +30,7 @@ type channelHandler struct {
 	columns        uint32
 	rows           uint32
 	execID         string
+	exitSent       bool
 }
 
 func (c *channelHandler) OnUnsupportedChannelRequest(_ uint64, _ string, _ []byte) {}
@@ -112,48 +114,132 @@ func (c *channelHandler) run(
 		return fmt.Errorf("program already running")
 	}
 
-	//TODO proper timeout handling
-	ctx := context.Background()
+	startContext, cancelFunc := context.WithTimeout(context.Background(), c.networkHandler.config.Config.Timeout)
+	defer cancelFunc()
 
 	execConfig := c.getExecConfig(program)
 
-	response, err := c.networkHandler.dockerClient.ContainerExecCreate(
-		ctx,
-		c.networkHandler.containerID,
-		execConfig,
-	)
-	if err != nil {
-		//TODO retry if connection failed
-		//TODO log error
+	if err := c.createExec(startContext, execConfig); err != nil {
 		return err
 	}
 
-	c.execID = response.ID
-
 	if c.pty {
-		if err := c.networkHandler.dockerClient.ContainerExecResize(
-			ctx, c.execID, types.ResizeOptions{
-				Height: uint(c.rows),
-				Width:  uint(c.columns),
-			},
-		); err != nil {
-			// TODO retry handling
+		if err := c.resizeExec(startContext); err != nil {
 			return err
 		}
 	}
 
-	attachResult, err := c.networkHandler.dockerClient.ContainerExecAttach(
-		ctx,
-		c.execID,
-		execConfig,
-	)
+	attachResult, err := c.attachExec(startContext, execConfig)
 	if err != nil {
-		// TODO retry handling
 		return err
 	}
 
-	go c.handleRun(ctx, onExit, attachResult, stdout, stderr, stdin)
+	go c.handleRun(onExit, attachResult, stdout, stderr, stdin)
 
+	return nil
+}
+
+func (c *channelHandler) attachExec(startContext context.Context, execConfig types.ExecConfig) (
+	types.HijackedResponse,
+	error,
+) {
+	var attachResult types.HijackedResponse
+	var lastError error
+loop:
+	for {
+		select {
+		case <-startContext.Done():
+			break loop
+		default:
+		}
+		var err error
+		attachResult, err = c.networkHandler.dockerClient.ContainerExecAttach(
+			startContext,
+			c.execID,
+			execConfig,
+		)
+		lastError = err
+		if err != nil {
+			c.networkHandler.logger.Warningd(
+				c.channelError(
+					"failed to attach to exec, retrying in 10 seconds",
+					err,
+				),
+			)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		break loop
+	}
+	if lastError != nil {
+		c.networkHandler.logger.Errord(c.channelError("failed to attach to exec, giving up", lastError))
+		return types.HijackedResponse{}, lastError
+	}
+	return attachResult, nil
+}
+
+func (c *channelHandler) resizeExec(startContext context.Context) error {
+	var lastError error
+loop:
+	for {
+		select {
+		case <-startContext.Done():
+			break loop
+		default:
+		}
+		err := c.networkHandler.dockerClient.ContainerExecResize(
+			startContext, c.execID, types.ResizeOptions{
+				Height: uint(c.rows),
+				Width:  uint(c.columns),
+			},
+		)
+		lastError = err
+		if err != nil {
+			c.networkHandler.logger.Warningd(
+				c.channelError(
+					"failed to resize exec window, retrying in 10 seconds",
+					err,
+				),
+			)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		break loop
+	}
+	if lastError != nil {
+		c.networkHandler.logger.Errord(c.channelError("failed to resize exec window, giving up", lastError))
+		return lastError
+	}
+	return nil
+}
+
+func (c *channelHandler) createExec(startContext context.Context, execConfig types.ExecConfig) error {
+	var lastError error
+loop:
+	for {
+		select {
+		case <-startContext.Done():
+			break loop
+		default:
+		}
+		response, err := c.networkHandler.dockerClient.ContainerExecCreate(
+			startContext,
+			c.networkHandler.containerID,
+			execConfig,
+		)
+		lastError = err
+		if err != nil {
+			c.networkHandler.logger.Warningd(c.channelError("failed to create exec, retrying in 10 seconds", err))
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		c.execID = response.ID
+		break loop
+	}
+	if lastError != nil {
+		c.networkHandler.logger.Errord(c.channelError("failed to create exec, giving up", lastError))
+		return lastError
+	}
 	return nil
 }
 
@@ -168,20 +254,50 @@ func (c *channelHandler) getExecConfig(program []string) types.ExecConfig {
 	}
 }
 
-func (c *channelHandler) done(ctx context.Context, onExit func(exitStatus sshserver.ExitStatus)) {
-	inspectResult, err := c.networkHandler.dockerClient.ContainerExecInspect(ctx, c.execID)
-	if err != nil {
-		//TODO handle retry
-		onExit(137)
-	} else if inspectResult.ExitCode >= 0 {
-		onExit(sshserver.ExitStatus(inspectResult.ExitCode))
-	} else {
-		onExit(137)
+func (c *channelHandler) done(onExit func(exitStatus sshserver.ExitStatus)) {
+	c.networkHandler.mutex.Lock()
+	if c.exitSent {
+		c.networkHandler.mutex.Unlock()
+		return
+	}
+	c.exitSent = true
+	c.networkHandler.mutex.Unlock()
+
+	doneContext, cancelFunc := context.WithTimeout(context.Background(), c.networkHandler.config.Config.Timeout)
+	defer cancelFunc()
+
+	var lastError error
+	var exitCode = 137
+loop:
+	for {
+		select {
+		case <-doneContext.Done():
+			break loop
+		default:
+		}
+		if c.networkHandler.disconnected {
+			return
+		}
+		inspectResult, err := c.networkHandler.dockerClient.ContainerExecInspect(doneContext, c.execID)
+		lastError = err
+		if err != nil {
+			c.networkHandler.logger.Warningd(c.channelError("failed to fetch container exec result, retrying in 10 seconds", err))
+		} else if inspectResult.ExitCode >= 0 {
+			exitCode = inspectResult.ExitCode
+			break loop
+		} else {
+			lastError = fmt.Errorf("negative exit code (%d)", inspectResult.ExitCode)
+			c.networkHandler.logger.Warningd(c.channelError("negative exit code returned from exec, retrying in 10 seconds", lastError))
+		}
+		time.Sleep(10 * time.Second)
+	}
+	onExit(sshserver.ExitStatus(exitCode))
+	if lastError != nil {
+		c.networkHandler.logger.Warningd(c.channelError("failed to fetch container exec result, giving up", lastError))
 	}
 }
 
 func (c *channelHandler) handleRun(
-	ctx context.Context,
 	onExit func(exitStatus sshserver.ExitStatus),
 	attachResult types.HijackedResponse,
 	stdout io.Writer,
@@ -192,7 +308,7 @@ func (c *channelHandler) handleRun(
 	wg.Add(2)
 	if c.pty {
 		go func() {
-			defer c.done(ctx, onExit)
+			defer c.done(onExit)
 			_, err := io.Copy(stdout, attachResult.Reader)
 			if err != nil && !errors.Is(err, io.EOF) {
 				c.networkHandler.logger.Warningd(
@@ -202,7 +318,7 @@ func (c *channelHandler) handleRun(
 		}()
 	} else {
 		go func() {
-			defer c.done(ctx, onExit)
+			defer c.done(onExit)
 			// Demultiplex Docker stream
 			_, err := stdcopy.StdCopy(stdout, stderr, attachResult.Reader)
 			if err != nil && !errors.Is(err, io.EOF) {

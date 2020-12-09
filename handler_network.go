@@ -28,6 +28,7 @@ type networkHandler struct {
 	containerID  string
 	dockerClient *client.Client
 	logger       log.Logger
+	disconnected bool
 }
 
 type containerError struct {
@@ -298,6 +299,7 @@ func (n *networkHandler) setupDockerClient() error {
 }
 
 func (n *networkHandler) OnDisconnect() {
+	n.disconnected = true
 	ctx, cancelFunc := context.WithTimeout(context.Background(), n.config.Config.Timeout)
 	defer cancelFunc()
 	n.mutex.Lock()
@@ -320,6 +322,9 @@ func (n *networkHandler) OnDisconnect() {
 					break
 				}
 				lastError = err
+				n.logger.Warningd(
+					n.containerError("failed to inspect container", err),
+				)
 				time.Sleep(10 * time.Second)
 				continue
 			}
