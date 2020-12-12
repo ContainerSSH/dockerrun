@@ -346,6 +346,9 @@ func (c *channelHandler) OnExecRequest(
 	stderr io.Writer,
 	onExit func(exitStatus sshserver.ExitStatus),
 ) error {
+	if c.networkHandler.config.Config.DisableCommand {
+		return fmt.Errorf("command execution is disabled")
+	}
 	return c.run(c.parseProgram(program), stdin, stdout, stderr, onExit)
 }
 
