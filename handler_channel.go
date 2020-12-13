@@ -39,7 +39,7 @@ func (c *channelHandler) OnFailedDecodeChannelRequest(_ uint64, _ string, _ []by
 
 func (c *channelHandler) OnEnvRequest(_ uint64, name string, value string) error {
 	c.networkHandler.mutex.Lock()
-	defer c.networkHandler.mutex.Lock()
+	defer c.networkHandler.mutex.Unlock()
 	if c.execID != "" {
 		return fmt.Errorf("program already running")
 	}
@@ -57,7 +57,7 @@ func (c *channelHandler) OnPtyRequest(
 	_ []byte,
 ) error {
 	c.networkHandler.mutex.Lock()
-	defer c.networkHandler.mutex.Lock()
+	defer c.networkHandler.mutex.Unlock()
 	if c.execID != "" {
 		return fmt.Errorf("program already running")
 	}
@@ -102,6 +102,7 @@ func (c *channelHandler) parseProgram(program string) []string {
 }
 
 func (c *channelHandler) run(
+	startContext context.Context,
 	program []string,
 	stdin io.Reader,
 	stdout io.Writer,
@@ -114,12 +115,14 @@ func (c *channelHandler) run(
 		return fmt.Errorf("program already running")
 	}
 
-	startContext, cancelFunc := context.WithTimeout(context.Background(), c.networkHandler.config.Config.Timeout)
-	defer cancelFunc()
-
 	execConfig := c.getExecConfig(program)
 
 	if err := c.createExec(startContext, execConfig); err != nil {
+		return err
+	}
+
+	attachResult, err := c.attachExec(startContext)
+	if err != nil {
 		return err
 	}
 
@@ -129,20 +132,12 @@ func (c *channelHandler) run(
 		}
 	}
 
-	attachResult, err := c.attachExec(startContext, execConfig)
-	if err != nil {
-		return err
-	}
-
 	go c.handleRun(onExit, attachResult, stdout, stderr, stdin)
 
 	return nil
 }
 
-func (c *channelHandler) attachExec(startContext context.Context, execConfig types.ExecConfig) (
-	types.HijackedResponse,
-	error,
-) {
+func (c *channelHandler) attachExec(startContext context.Context) (types.HijackedResponse, error) {
 	var attachResult types.HijackedResponse
 	var lastError error
 loop:
@@ -156,7 +151,10 @@ loop:
 		attachResult, err = c.networkHandler.dockerClient.ContainerExecAttach(
 			startContext,
 			c.execID,
-			execConfig,
+			types.ExecStartCheck{
+				Detach: false,
+				Tty:    c.pty,
+			},
 		)
 		lastError = err
 		if err != nil {
@@ -319,7 +317,6 @@ func (c *channelHandler) handleRun(
 	} else {
 		go func() {
 			defer c.done(onExit)
-			// Demultiplex Docker stream
 			_, err := stdcopy.StdCopy(stdout, stderr, attachResult.Reader)
 			if err != nil && !errors.Is(err, io.EOF) {
 				c.networkHandler.logger.Warningd(
@@ -329,6 +326,7 @@ func (c *channelHandler) handleRun(
 		}()
 	}
 	go func() {
+		defer c.done(onExit)
 		_, err := io.Copy(attachResult.Conn, stdin)
 		if err != nil && !errors.Is(err, io.EOF) {
 			c.networkHandler.logger.Warningd(
@@ -349,7 +347,10 @@ func (c *channelHandler) OnExecRequest(
 	if c.networkHandler.config.Config.DisableCommand {
 		return fmt.Errorf("command execution is disabled")
 	}
-	return c.run(c.parseProgram(program), stdin, stdout, stderr, onExit)
+
+	startContext, cancelFunc := context.WithTimeout(context.Background(), c.networkHandler.config.Config.Timeout)
+	defer cancelFunc()
+	return c.run(startContext, c.parseProgram(program), stdin, stdout, stderr, onExit)
 }
 
 func (c *channelHandler) OnShell(
@@ -359,7 +360,18 @@ func (c *channelHandler) OnShell(
 	stderr io.Writer,
 	onExit func(exitStatus sshserver.ExitStatus),
 ) error {
-	return c.run(nil, stdin, stdout, stderr, onExit)
+	if c.networkHandler.config.Config.DisableShell {
+		return fmt.Errorf("shell is disabled")
+	}
+
+	startContext, cancelFunc := context.WithTimeout(context.Background(), c.networkHandler.config.Config.Timeout)
+	defer cancelFunc()
+
+	return c.run(startContext, c.getDefaultShell(), stdin, stdout, stderr, onExit)
+}
+
+func (c *channelHandler) getDefaultShell() []string {
+	return c.networkHandler.config.Config.ShellCommand
 }
 
 func (c *channelHandler) OnSubsystem(
@@ -370,15 +382,22 @@ func (c *channelHandler) OnSubsystem(
 	stderr io.Writer,
 	onExit func(exitStatus sshserver.ExitStatus),
 ) error {
+	if c.networkHandler.config.Config.DisableSubsystem {
+		return fmt.Errorf("subsystem requests are disabled")
+	}
+
+	startContext, cancelFunc := context.WithTimeout(context.Background(), c.networkHandler.config.Config.Timeout)
+	defer cancelFunc()
+
 	if binary, ok := c.networkHandler.config.Config.Subsystems[subsystem]; ok {
-		return c.run([]string{binary}, stdin, stdout, stderr, onExit)
+		return c.run(startContext, []string{binary}, stdin, stdout, stderr, onExit)
 	}
 	return fmt.Errorf("subsystem not supported")
 }
 
 func (c *channelHandler) OnSignal(_ uint64, _ string) error {
 	c.networkHandler.mutex.Lock()
-	defer c.networkHandler.mutex.Lock()
+	defer c.networkHandler.mutex.Unlock()
 	if c.execID == "" {
 		return fmt.Errorf("program not running")
 	}
@@ -388,24 +407,31 @@ func (c *channelHandler) OnSignal(_ uint64, _ string) error {
 
 func (c *channelHandler) OnWindow(_ uint64, columns uint32, rows uint32, _ uint32, _ uint32) error {
 	c.networkHandler.mutex.Lock()
-	defer c.networkHandler.mutex.Lock()
+	defer c.networkHandler.mutex.Unlock()
 	if c.execID == "" {
 		return fmt.Errorf("program not running")
 	}
 
-	//TODO context handling
-	ctx := context.Background()
+	ctx, cancelFunc := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelFunc()
 
-	if err := c.networkHandler.dockerClient.ContainerExecResize(
-		ctx, c.execID, types.ResizeOptions{
-			Height: uint(rows),
-			Width:  uint(columns),
-		},
-	); err != nil {
-		//TODO retry handling
-		//TODO logging
-		return err
+	var lastError error
+	for {
+		lastError = c.networkHandler.dockerClient.ContainerExecResize(
+			ctx, c.execID, types.ResizeOptions{
+				Height: uint(rows),
+				Width:  uint(columns),
+			},
+		)
+		if lastError == nil {
+			return nil
+		}
+		c.networkHandler.logger.Warningd(c.channelError("failed to resize window, retrying in 10 seconds", lastError))
+		select {
+		case <-ctx.Done():
+			c.networkHandler.logger.Errord(c.channelError("failed to resize window, giving up", lastError))
+			return lastError
+		case <-time.After(10 * time.Second):
+		}
 	}
-
-	return nil
 }

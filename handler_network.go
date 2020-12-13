@@ -67,7 +67,7 @@ func (n *networkHandler) OnHandshakeSuccess(username string) (
 	defer cancelFunc()
 	n.username = username
 
-	if err := n.setupDockerClient(); err != nil {
+	if err := n.setupDockerClient(ctx); err != nil {
 		return nil, err
 	}
 	if err := n.pullImage(ctx); err != nil {
@@ -105,7 +105,7 @@ func (n *networkHandler) pullNeeded(ctx context.Context) (bool, error) {
 			}
 
 			if _, _, err := n.dockerClient.ImageInspectWithRaw(ctx, image); err != nil {
-				if client.IsErrImageNotFound(err) {
+				if client.IsErrNotFound(err) {
 					return true, nil
 				}
 				n.logger.Warningd(
@@ -269,6 +269,7 @@ loop:
 			&newConfig,
 			&n.config.Config.HostConfig,
 			&n.config.Config.NetworkConfig,
+			n.config.Config.Platform,
 			n.config.Config.ContainerName,
 		)
 		if err != nil {
@@ -287,9 +288,9 @@ loop:
 	return nil
 }
 
-func (n *networkHandler) setupDockerClient() error {
+func (n *networkHandler) setupDockerClient(ctx context.Context) error {
 	if n.dockerClient == nil {
-		dockerClient, err := n.config.getDockerClient()
+		dockerClient, err := n.config.getDockerClient(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to create Docker client (%w)", err)
 		}
@@ -317,7 +318,7 @@ func (n *networkHandler) OnDisconnect() {
 			}
 
 			if _, err := n.dockerClient.ContainerInspect(ctx, n.containerID); err != nil {
-				if client.IsErrContainerNotFound(err) {
+				if client.IsErrNotFound(err) {
 					success = true
 					break
 				}
