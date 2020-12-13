@@ -1,6 +1,7 @@
 package dockerrun
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
@@ -8,7 +9,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-func (config Config) getDockerClient() (*client.Client, error) {
+func (config Config) getDockerClient(ctx context.Context) (*client.Client, error) {
 	var httpClient *http.Client = nil
 	if config.CaCert != "" && config.Key != "" && config.Cert != "" {
 		tlsConfig := &tls.Config{}
@@ -27,10 +28,14 @@ func (config Config) getDockerClient() (*client.Client, error) {
 		}
 	}
 
-	cli, err := client.NewClient(config.Host, "", httpClient, make(map[string]string))
+	cli, err := client.NewClientWithOpts(
+		client.WithHost(config.Host),
+		client.WithHTTPClient(httpClient),
+	)
 	if err != nil {
 		return nil, err
 	}
+	cli.NegotiateAPIVersion(ctx)
 
 	return cli, nil
 }
