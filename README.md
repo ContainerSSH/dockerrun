@@ -1,10 +1,12 @@
-[![ContainerSSH - Launch Containers on Demand](https://containerssh.github.io/images/logo-for-embedding.svg)](https://containerssh.github.io/)
+[![ContainerSSH - Launch Containers on Demand](https://containerssh.io/deprecations/dockerrun.png)](https://containerssh.github.io/)
 
 <!--suppress HtmlDeprecatedAttribute -->
-<h1 align="center">ContainerSSH DockerRun Backend Library</h1>
+<h1 align="center">The ContainerSSH DockerRun Backend is deprecated!</h1>
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/containerssh/dockerrun?style=for-the-badge)](https://goreportcard.com/report/github.com/containerssh/library-template)
 [![LGTM Alerts](https://img.shields.io/lgtm/alerts/github/ContainerSSH/dockerrun?style=for-the-badge)](https://lgtm.com/projects/g/ContainerSSH/library-template/)
+
+<p align="center">⚠⚠⚠ This backend is no longer maintained and replaced by the [docker backend](https://github.com/containerssh/docker). Please see [the deprecation notice for details](https://containerssh.io/deprecations/dockerrun/). ⚠⚠⚠</p>
 
 This library implements a backend that connects to a Docker socket and launches a new container for each connection, then runs executes a separate command per channel.
 
