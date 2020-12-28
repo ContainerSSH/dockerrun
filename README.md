@@ -1,7 +1,7 @@
 [![ContainerSSH - Launch Containers on Demand](https://containerssh.io/deprecations/dockerrun.png)](https://containerssh.github.io/)
 
 <!--suppress HtmlDeprecatedAttribute -->
-<h1 align="center">⚠ The ContainerSSH DockerRun Backend is deprecated! ⚠</h1>
+<h1 align="center">⚠ The DockerRun Backend is deprecated! ⚠</h1>
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/containerssh/dockerrun?style=for-the-badge)](https://goreportcard.com/report/github.com/containerssh/library-template)
 [![LGTM Alerts](https://img.shields.io/lgtm/alerts/github/ContainerSSH/dockerrun?style=for-the-badge)](https://lgtm.com/projects/g/ContainerSSH/library-template/)
